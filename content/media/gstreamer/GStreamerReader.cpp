@@ -162,7 +162,11 @@ nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
 
   mVideoSink = gst_parse_bin_from_description("capsfilter name=filter ! "
       "appsink name=videosink sync=true max-buffers=1 "
+#ifdef HAS_NEMO_INTERFACE
+      "caps=video/x-android-buffer"
+#else
       "caps=video/x-raw-yuv,format=(fourcc)I420"
+#endif
       , TRUE, nullptr);
   mVideoAppSink = GST_APP_SINK(gst_bin_get_by_name(GST_BIN(mVideoSink),
         "videosink"));
