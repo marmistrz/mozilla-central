@@ -18,6 +18,10 @@
 #ifdef HAS_NEMO_INTERFACE
 #include <gst/interfaces/nemovideotexture.h>
 #endif
+#include "GLContextProvider.h"
+#include "GLContext.h"
+
+using namespace mozilla::gl;
 
 namespace mozilla {
 
@@ -59,6 +63,20 @@ typedef enum {
 } PlayFlags;
 
 static int sDroidEGLSinkInUse = 0;
+#ifdef HAS_NEMO_INTERFACE
+static nsRefPtr<GLContext> sPluginContext = nullptr;
+
+static bool EnsureGLContext()
+{
+  if (!sPluginContext) {
+    gfxIntSize dummySize(16, 16);
+    sPluginContext = GLContextProvider::CreateOffscreen(dummySize,
+                                                        GLContext::SurfaceCaps::Any());
+  }
+
+  return sPluginContext != nullptr;
+}
+#endif
 
 GStreamerReader::GStreamerReader(AbstractMediaDecoder* aDecoder)
   : MediaDecoderReader(aDecoder),
@@ -627,23 +645,35 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
     MediaResource* resource = mDecoder->GetResource();
     NS_ASSERTION(resource, "Decoder has no media resource");
 
+#ifdef HAS_NEMO_INTERFACE
+    if (!EnsureGLContext())
+      return false;
+
+    SharedTextureHandle handle =
+      sPluginContext->CreateSharedHandle(gl::SameProcess,
+                                         (void*)mPlaySink,
+                                         gl::GstreamerMagicHandle);
+
+    if (!nemo_gst_video_texture_acquire_frame(NEMO_GST_VIDEO_TEXTURE(mPlaySink))) {
+        return true;
+    }
+
     int64_t offset = 0; // mDecoder->GetResource()->Tell(); Estimate location in media. ?
     int64_t timestamp = aTimeThreshold; // GST_SYNC_TIMESTAMP(mPlaySink);
     int64_t endTime = timestamp + 1; // timestamp + GST_SYNC_DURATION(mPlaySink);
     bool isKeyframe = false; // !GST_SYNC_FLAG_IS_SET(mPlaySink, GST_SYNC_FLAG_DISCONT);
     int64_t timecode = -1; //
-#ifdef HAS_NEMO_INTERFACE
     NemoGstVideoTextureFrameInfo info;
-    if (false && nemo_gst_video_texture_get_frame_info(NEMO_GST_VIDEO_TEXTURE(mPlaySink), &info))
+    if (nemo_gst_video_texture_get_frame_info(NEMO_GST_VIDEO_TEXTURE(mPlaySink), &info))
     {
-        timestamp = info.timestamp;
-        offset = info.offset;
+        timestamp = gst_segment_to_stream_time(&mVideoSegment, GST_FORMAT_TIME, info.timestamp);
         endTime = timestamp + info.duration;
     }
-#endif
+    nemo_gst_video_texture_release_frame(NEMO_GST_VIDEO_TEXTURE(mPlaySink), nullptr);
+
     VideoData *v = VideoData::Create(mInfo,
                                      mDecoder->GetImageContainer(),
-                                     (void*)mPlaySink,
+                                     (void*)handle,
                                      mPicture,
                                      offset, timestamp, endTime,
                                      isKeyframe, timecode);
@@ -651,6 +681,8 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
       return false;
 
     mVideoQueue.Push(v);
+#endif
+
     return true;
   }
 

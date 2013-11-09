@@ -962,6 +962,11 @@ GLContextEGL::CreateSharedHandle(SharedTextureShareType shareType,
 
         return (SharedTextureHandle) new SurfaceTextureWrapper(reinterpret_cast<nsSurfaceTexture*>(buffer));
 #endif
+#ifdef HAS_NEMO_INTERFACE
+    case SharedTextureBufferType::GstreamerMagicHandle:
+        g_object_set(G_OBJECT(buffer), "egl-display", EGL_DISPLAY(), NULL);
+        return (SharedTextureHandle) new GstVideoSyncWrapper(static_cast<GstElement*>(buffer));
+#endif
     case SharedTextureBufferType::TextureID: {
         if (!mShareWithEGLImage)
             return 0;
