@@ -257,11 +257,13 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
 
       RefPtr<TextureHost> texture = compositable->GetTextureHost(op.textureID());
       MOZ_ASSERT(texture);
+      TextureFlags flags = TEXTURE_DEALLOCATE_HOST;
+      if (texture) {
+        flags = texture->GetFlags();
 
-      TextureFlags flags = texture->GetFlags();
-
-      if (flags & TEXTURE_DEALLOCATE_HOST) {
-        texture->DeallocateSharedData();
+        if (flags & TEXTURE_DEALLOCATE_HOST) {
+          texture->DeallocateSharedData();
+        }
       }
 
       compositable->RemoveTextureHost(op.textureID());

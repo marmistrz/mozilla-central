@@ -180,6 +180,7 @@ private:
   GstElement* mPlaySink;
   bool mPlayingStartedOnce;
   bool mDroidEGLSinkInUse;
+  bool mDroidBufferHandleFMT;
 };
 
 } // namespace mozilla

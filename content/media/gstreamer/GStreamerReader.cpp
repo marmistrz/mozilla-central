@@ -98,7 +98,8 @@ GStreamerReader::GStreamerReader(AbstractMediaDecoder* aDecoder)
   fpsDen(0),
   mPlaySink(nullptr),
   mPlayingStartedOnce(false),
-  mDroidEGLSinkInUse(false)
+  mDroidEGLSinkInUse(false),
+  mDroidBufferHandleFMT(false)
 {
   MOZ_COUNT_CTOR(GStreamerReader);
 
@@ -173,8 +174,15 @@ nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
 
   mVideoSink = gst_parse_bin_from_description("capsfilter name=filter ! "
       "appsink name=videosink sync=true max-buffers=1 "
+#ifdef HAS_NEMO_INTERFACE
+      "caps=video/x-android-buffer"
+#else
       "caps=video/x-raw-yuv,format=(fourcc)I420"
+#endif
       , TRUE, nullptr);
+#ifdef HAS_NEMO_INTERFACE
+  mDroidBufferHandleFMT = true;
+#endif
   mVideoAppSink = GST_APP_SINK(gst_bin_get_by_name(GST_BIN(mVideoSink),
         "videosink"));
   gst_app_sink_set_callbacks(mVideoAppSink, &mSinkCallbacks,
@@ -780,10 +788,39 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
   }
 
   guint8* data = GST_BUFFER_DATA(buffer);
+  size_t bufsize = GST_BUFFER_SIZE(buffer);
 
   int width = mPicture.width;
   int height = mPicture.height;
   GstVideoFormat format = mFormat;
+
+  isKeyframe = !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
+  /* XXX ? */
+  int64_t offset = 0;
+
+  printf(">>>>>>Func:%s::%d\n", __PRETTY_FUNCTION__, __LINE__);
+
+  if (bufsize == 4 && mDroidBufferHandleFMT == true)
+  {
+    if (!EnsureGLContext())
+      return false;
+
+    SharedTextureHandle handle =
+      sPluginContext->CreateSharedHandle(gl::SameProcess,
+                                         (void*)buffer,
+                                         gl::GstreamerMagicHandle2);
+
+    VideoData *v = VideoData::Create(mInfo,
+                                     mDecoder->GetImageContainer(),
+                                     mPicture,
+                                     offset, timestamp, nextTimestamp,
+                                     isKeyframe, -1,
+                                     (void*)handle);
+
+    mVideoQueue.Push(v);
+    gst_buffer_unref(buffer);
+    return true;
+  }
 
   VideoData::YCbCrBuffer b;
   for(int i = 0; i < 3; i++) {
@@ -797,10 +834,6 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
     b.mPlanes[i].mOffset = 0;
     b.mPlanes[i].mSkip = 0;
   }
-
-  isKeyframe = !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
-  /* XXX ? */
-  int64_t offset = 0;
   VideoData* video = VideoData::Create(mInfo, image, offset,
                                        timestamp, nextTimestamp, b,
                                        isKeyframe, -1, mPicture);

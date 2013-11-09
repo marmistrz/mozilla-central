@@ -760,6 +760,7 @@ enum SharedHandleType {
 #endif
 #ifdef HAS_NEMO_INTERFACE
     , SharedHandleType_GstreamerMagicHandle
+    , SharedHandleType_GstreamerMagicHandle2
 #endif
 };
 
@@ -823,6 +824,27 @@ public:
 private:
     void* mPlaySink;
 };
+
+class GstVideoSyncWrapper2: public SharedTextureHandleWrapper
+{
+public:
+    GstVideoSyncWrapper2(void* aBuffer)
+      : SharedTextureHandleWrapper(SharedHandleType_GstreamerMagicHandle2)
+      , mBuffer(aBuffer)
+    {
+    }
+
+    virtual ~GstVideoSyncWrapper2()
+    {
+        mBuffer = nullptr;
+    }
+
+    void* GstBuffer() { return mBuffer; }
+
+private:
+    void* mBuffer;
+};
+
 #endif
 
 class EGLTextureWrapper : public SharedTextureHandleWrapper
@@ -964,8 +986,11 @@ GLContextEGL::CreateSharedHandle(SharedTextureShareType shareType,
 #endif
 #ifdef HAS_NEMO_INTERFACE
     case SharedTextureBufferType::GstreamerMagicHandle:
+        printf(">>>>>>Func:%s::%d\n", __PRETTY_FUNCTION__, __LINE__);
         g_object_set(G_OBJECT(buffer), "egl-display", EGL_DISPLAY(), NULL);
         return (SharedTextureHandle) new GstVideoSyncWrapper(static_cast<GstElement*>(buffer));
+    case SharedTextureBufferType::GstreamerMagicHandle2:
+        return (SharedTextureHandle) new GstVideoSyncWrapper2(buffer);
 #endif
     case SharedTextureBufferType::TextureID: {
         if (!mShareWithEGLImage)
@@ -1029,7 +1054,8 @@ bool GLContextEGL::GetSharedHandleDetails(SharedTextureShareType shareType,
 
     switch (wrapper->Type()) {
 #ifdef HAS_NEMO_INTERFACE
-    case SharedHandleType_GstreamerMagicHandle: {
+    case SharedHandleType_GstreamerMagicHandle:
+    case SharedHandleType_GstreamerMagicHandle2: {
         details.mTarget = LOCAL_GL_TEXTURE_EXTERNAL;
         details.mTextureFormat = FORMAT_R8G8B8A8;
         break;
@@ -1078,6 +1104,10 @@ void GLContextEGL::DetachSharedHandle(SharedTextureShareType shareType,
         }
         return;
     }
+    case SharedHandleType_GstreamerMagicHandle2: {
+        GstVideoSyncWrapper2* gstwrapper = reinterpret_cast<GstVideoSyncWrapper2*>(sharedHandle);
+        return;
+    }
     default:
         NS_ERROR("Unhandled shared handle type");
         return;
@@ -1115,6 +1145,10 @@ bool GLContextEGL::AttachSharedHandle(SharedTextureShareType shareType,
             fEGLImageTargetTexture2D(LOCAL_GL_TEXTURE_EXTERNAL, img);
         }
         break;
+    }
+    case SharedHandleType_GstreamerMagicHandle2: {
+        GstVideoSyncWrapper2* gstwrapper = reinterpret_cast<GstVideoSyncWrapper2*>(sharedHandle);
+        return true;
     }
 #endif
 #ifdef MOZ_WIDGET_ANDROID
@@ -2131,15 +2165,20 @@ GLContextProviderEGL::CreateSharedHandle(SharedTextureShareType shareType,
                                          void* buffer,
                                          SharedTextureBufferType bufferType)
 {
-#ifdef HAS_NEMO_INTERFACE
-  if (shareType == gl::SameProcess &&
-      bufferType == gl::GstreamerMagicHandle) {
+    if (shareType != SameProcess)
+        return 0;
 
-    GstVideoSyncWrapper* wrap = new GstVideoSyncWrapper(static_cast<GstElement*>(buffer));
-    return (SharedTextureHandle)wrap;
-  }
+#ifdef HAS_NEMO_INTERFACE
+    if (bufferType == gl::GstreamerMagicHandle) {
+        GstVideoSyncWrapper* wrap = new GstVideoSyncWrapper(static_cast<GstElement*>(buffer));
+        return (SharedTextureHandle)wrap;
+    } else if (bufferType == gl::GstreamerMagicHandle2) {
+        GstVideoSyncWrapper2* wrap = new GstVideoSyncWrapper2(static_cast<GstElement*>(buffer));
+        return (SharedTextureHandle)wrap;
+    }
 #endif
-  return 0;
+
+    return 0;
 }
 
 already_AddRefed<gfxASurface>

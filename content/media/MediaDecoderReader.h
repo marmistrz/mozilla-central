@@ -200,6 +200,16 @@ public:
                            bool aKeyframe,
                            int64_t aTimecode);
 
+  static VideoData* Create(VideoInfo& aInfo,
+                           ImageContainer* aContainer,
+                           nsIntRect aPicture,
+                           int64_t aOffset,
+                           int64_t aTime,
+                           int64_t aEndTime,
+                           bool aKeyframe,
+                           int64_t aTimecode,
+                           void* aMagicHandle);
+
   static VideoData* CreateFromImage(VideoInfo& aInfo,
                                     ImageContainer* aContainer,
                                     int64_t aOffset,
