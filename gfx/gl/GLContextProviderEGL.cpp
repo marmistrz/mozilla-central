@@ -916,6 +916,9 @@ public:
                 { LOCAL_EGL_IMAGE_PRESERVED_KHR, LOCAL_EGL_TRUE, LOCAL_EGL_NONE, LOCAL_EGL_NONE };
 
             void* buffer = GStreamerGLHelper::GetHandleBuffer(mBuffer);
+            if (!buffer) {
+                return nullptr;
+            }
 
             mImage = sEGLLibrary.fCreateImage(EGL_DISPLAY(),
                                               EGL_NO_CONTEXT,
@@ -1107,10 +1110,15 @@ bool GLContextEGL::AttachSharedHandle(SharedTextureShareType shareType,
         break;
     }
 #endif // MOZ_WIDGET_ANDROID
+
     case SharedHandleType_GstreamerMagicHandle: {
         GstVideoSyncWrapper* gstwrapper = reinterpret_cast<GstVideoSyncWrapper*>(wrapper);
 
         EGLImage img = gstwrapper->Image();
+        if (!img) {
+            return false;
+        }
+
         fEGLImageTargetTexture2D(LOCAL_GL_TEXTURE_EXTERNAL, img);
         break;
     }
@@ -1141,6 +1149,8 @@ void GLContextEGL::DetachSharedHandle(SharedTextureShareType shareType,
     SharedTextureHandleWrapper* wrapper = reinterpret_cast<SharedTextureHandleWrapper*>(sharedHandle);
     switch (wrapper->Type()) {
     case SharedHandleType_GstreamerMagicHandle: {
+        GstVideoSyncWrapper* gstwrapper = reinterpret_cast<GstVideoSyncWrapper*>(wrapper);
+        gstwrapper->ResetPlaySink();
         return;
     }
     default:
