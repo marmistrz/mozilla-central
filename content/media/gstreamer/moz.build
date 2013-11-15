@@ -9,6 +9,7 @@ MODULE = 'content'
 EXPORTS += [
     'GStreamerDecoder.h',
     'GStreamerFormatHelper.h',
+    'GStreamerGLHelper.h',
     'GStreamerLoader.h',
     'GStreamerReader.h',
 ]
@@ -16,6 +17,7 @@ EXPORTS += [
 CPP_SOURCES += [
     'GStreamerDecoder.cpp',
     'GStreamerFormatHelper.cpp',
+    'GStreamerGLHelper.cpp',
     'GStreamerReader.cpp',
     'GStreamerMozVideoBuffer.cpp',
     'GStreamerLoader.cpp',

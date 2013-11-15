@@ -15,13 +15,14 @@
 #include "mozilla/dom/TimeRanges.h"
 #include "mozilla/Preferences.h"
 #include "GStreamerLoader.h"
-#ifdef HAS_NEMO_INTERFACE
-#include <gst/interfaces/nemovideotexture.h>
-#endif
+#include "GLContextTypes.h"
+#include "GLContextProvider.h"
+#include "GStreamerGLHelper.h"
 
 namespace mozilla {
 
 using namespace layers;
+using namespace gl;
 
 // Un-comment to enable logging of seek bisections.
 //#define SEEK_LOGGING
@@ -58,8 +59,6 @@ typedef enum {
   GST_PLAY_FLAG_SOFT_COLORBALANCE = (1 << 10)
 } PlayFlags;
 
-static int sDroidEGLSinkInUse = 0;
-
 GStreamerReader::GStreamerReader(AbstractMediaDecoder* aDecoder)
   : MediaDecoderReader(aDecoder),
   mPlayBin(nullptr),
@@ -77,10 +76,7 @@ GStreamerReader::GStreamerReader(AbstractMediaDecoder* aDecoder)
   mByteOffset(0),
   mLastReportedByteOffset(0),
   fpsNum(0),
-  fpsDen(0),
-  mPlaySink(nullptr),
-  mPlayingStartedOnce(false),
-  mDroidEGLSinkInUse(false)
+  fpsDen(0)
 {
   MOZ_COUNT_CTOR(GStreamerReader);
 
@@ -107,15 +103,8 @@ GStreamerReader::~GStreamerReader()
     if (mSource)
       gst_object_unref(mSource);
     gst_element_set_state(mPlayBin, GST_STATE_NULL);
-    if (mDroidEGLSinkInUse)
-    {
-      sDroidEGLSinkInUse--;
-      mDroidEGLSinkInUse = false;
-    }
     gst_object_unref(mPlayBin);
-    mPlayingStartedOnce = false;
     mPlayBin = nullptr;
-    mPlaySink = nullptr;
     mVideoSink = nullptr;
     mVideoAppSink = nullptr;
     mAudioSink = nullptr;
@@ -139,37 +128,25 @@ nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
     LOG(PR_LOG_ERROR, ("couldn't create playbin2"));
     return NS_ERROR_FAILURE;
   }
-#ifdef HAS_NEMO_INTERFACE
-  static bool sDisableNemoIface = getenv("NO_GST_NEMO") != 0;
-  if (!sDisableNemoIface)
-  {
-    mPlaySink = gst_element_factory_make("droideglsink", nullptr);
-    if (!mPlaySink) {
-      LOG(PR_LOG_DEBUG, ("could not create egl sink: %p", mPlaySink));
-      return NS_ERROR_FAILURE;
-    }
-  }
-#endif
   g_object_set(mPlayBin, "buffer-size", 0, nullptr);
   mBus = gst_pipeline_get_bus(GST_PIPELINE(mPlayBin));
 
   mVideoSink = gst_parse_bin_from_description("capsfilter name=filter ! "
       "appsink name=videosink sync=true max-buffers=1 "
+#ifdef HAS_NEMO_RESOURCE // FIXME we should find better way to detect nemo environment
+      "caps=video/x-android-buffer"
+#else
       "caps=video/x-raw-yuv,format=(fourcc)I420"
+#endif
       , TRUE, nullptr);
+
   mVideoAppSink = GST_APP_SINK(gst_bin_get_by_name(GST_BIN(mVideoSink),
         "videosink"));
   gst_app_sink_set_callbacks(mVideoAppSink, &mSinkCallbacks,
       (gpointer) this, nullptr);
-  GstPad* sinkpad = gst_element_get_pad(mPlaySink ? mPlaySink : GST_ELEMENT(mVideoAppSink), "sink");
+  GstPad* sinkpad = gst_element_get_pad(GST_ELEMENT(mVideoAppSink), "sink");
   gst_pad_add_event_probe(sinkpad,
       G_CALLBACK(&GStreamerReader::EventProbeCb), this);
-
-#ifdef HAS_NEMO_INTERFACE
-  g_signal_connect(G_OBJECT(sinkpad), "notify::caps",
-                   G_CALLBACK(GStreamerReader::PlaySinkCapsNotify), this);
-#endif
-
   gst_object_unref(sinkpad);
   gst_pad_set_bufferalloc_function(sinkpad, GStreamerReader::AllocateVideoBufferCb);
   gst_pad_set_element_private(sinkpad, this);
@@ -200,43 +177,14 @@ nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
   gst_object_unref(sinkpad);
 
   g_object_set(mPlayBin, "uri", "appsrc://",
-               "video-sink", mPlaySink ? mPlaySink : mVideoSink,
+               "video-sink", mVideoSink,
                "audio-sink", mAudioSink,
                nullptr);
 
   g_signal_connect(G_OBJECT(mPlayBin), "notify::source",
                    G_CALLBACK(GStreamerReader::PlayBinSourceSetupCb), this);
 
-  if (mPlaySink) {
-    g_signal_connect(G_OBJECT(mPlaySink), "frame-ready",
-                     G_CALLBACK(GStreamerReader::PlaySinkFrameSetupCb), this);
-  }
-
   return NS_OK;
-}
-
-void GStreamerReader::Play()
-{
-  if (mPlaySink && mPlayBin && mPlayingStartedOnce) {
-    if (!mDroidEGLSinkInUse && sDroidEGLSinkInUse == 0)
-    {
-      sDroidEGLSinkInUse++;
-      mDroidEGLSinkInUse = true;
-      gst_element_set_state(mPlayBin, GST_STATE_PLAYING);
-    }
-  }
-}
-
-void GStreamerReader::Pause()
-{
-  if (mPlaySink && mPlayBin && mPlayingStartedOnce) {
-    if (mDroidEGLSinkInUse)
-    {
-      sDroidEGLSinkInUse--;
-      mDroidEGLSinkInUse = false;
-    }
-    gst_element_set_state(mPlayBin, GST_STATE_PAUSED);
-  }
 }
 
 GstBusSyncReply
@@ -355,11 +303,6 @@ nsresult GStreamerReader::ReadMetadata(VideoInfo* aInfo,
 
     /* start the pipeline */
     gst_element_set_state(mPlayBin, GST_STATE_PAUSED);
-    if (mDroidEGLSinkInUse)
-    {
-      sDroidEGLSinkInUse--;
-      mDroidEGLSinkInUse = false;
-    }
 
     /* Wait for ASYNC_DONE, which is emitted when the pipeline is built,
      * prerolled and ready to play. Also watch for errors.
@@ -377,7 +320,6 @@ nsresult GStreamerReader::ReadMetadata(VideoInfo* aInfo,
       g_free(debug);
       gst_element_set_state(mPlayBin, GST_STATE_NULL);
       gst_message_unref(message);
-      mPlayingStartedOnce = false;
       ret = NS_ERROR_FAILURE;
     } else {
       gst_message_unref(message);
@@ -395,14 +337,13 @@ nsresult GStreamerReader::ReadMetadata(VideoInfo* aInfo,
 
   /* FIXME: workaround for a bug in matroskademux. This seek makes matroskademux
    * parse the index */
-  if (!mPlaySink && gst_element_seek_simple(mPlayBin, GST_FORMAT_TIME,
+  if (gst_element_seek_simple(mPlayBin, GST_FORMAT_TIME,
         GST_SEEK_FLAG_FLUSH, 0)) {
     /* after a seek we need to wait again for ASYNC_DONE */
     message = gst_bus_timed_pop_filtered(mBus, GST_CLOCK_TIME_NONE,
        (GstMessageType)(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR));
     if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
       gst_element_set_state(mPlayBin, GST_STATE_NULL);
-      mPlayingStartedOnce = false;
       gst_message_unref(message);
       return NS_ERROR_FAILURE;
     }
@@ -436,13 +377,7 @@ nsresult GStreamerReader::ReadMetadata(VideoInfo* aInfo,
 
   /* set the pipeline to PLAYING so that it starts decoding and queueing data in
    * the appsinks */
-  if (!mDroidEGLSinkInUse && sDroidEGLSinkInUse == 0)
-  {
-    sDroidEGLSinkInUse++;
-    mDroidEGLSinkInUse = true;
-    mPlayingStartedOnce = true;
-    gst_element_set_state(mPlayBin, GST_STATE_PLAYING);
-  }
+  gst_element_set_state(mPlayBin, GST_STATE_PLAYING);
 
   return NS_OK;
 }
@@ -595,66 +530,8 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
 
-  if (mPlaySink)
-  {
-    {
-      ReentrantMonitorAutoEnter mon(mGstThreadsMonitor);
-
-      if (mReachedEos) {
-        mVideoQueue.Finish();
-        return false;
-      }
-
-      if (mVideoQueue.GetSize() > 0)
-      {
-        mon.Wait();
-      }
-
-      if (mVideoQueue.GetSize() > 0)
-      {
-        return true;
-      }
-
-      NotifyBytesConsumed();
-      mDecoder->NotifyDecodedFrames(0, 1);
-    }
-
-    // Record number of frames decoded and parsed. Automatically update the
-    // stats counters using the AutoNotifyDecoded stack-based class.
-    uint32_t parsed = 0, decoded = 0;
-    AbstractMediaDecoder::AutoNotifyDecoded autoNotify(mDecoder, parsed, decoded);
-
-    MediaResource* resource = mDecoder->GetResource();
-    NS_ASSERTION(resource, "Decoder has no media resource");
-
-    int64_t offset = 0; // mDecoder->GetResource()->Tell(); Estimate location in media. ?
-    int64_t timestamp = aTimeThreshold; // GST_SYNC_TIMESTAMP(mPlaySink);
-    int64_t endTime = timestamp + 1; // timestamp + GST_SYNC_DURATION(mPlaySink);
-    bool isKeyframe = false; // !GST_SYNC_FLAG_IS_SET(mPlaySink, GST_SYNC_FLAG_DISCONT);
-    int64_t timecode = -1; //
-#ifdef HAS_NEMO_INTERFACE
-    NemoGstVideoTextureFrameInfo info;
-    if (false && nemo_gst_video_texture_get_frame_info(NEMO_GST_VIDEO_TEXTURE(mPlaySink), &info))
-    {
-        timestamp = info.timestamp;
-        offset = info.offset;
-        endTime = timestamp + info.duration;
-    }
-#endif
-    VideoData *v = VideoData::Create(mInfo,
-                                     mDecoder->GetImageContainer(),
-                                     (void*)mPlaySink,
-                                     mPicture,
-                                     offset, timestamp, endTime,
-                                     isKeyframe, timecode);
-    if (!v)
-      return false;
-
-    mVideoQueue.Push(v);
-    return true;
-  }
-
   GstBuffer *buffer = nullptr;
+
   {
     ReentrantMonitorAutoEnter mon(mGstThreadsMonitor);
 
@@ -724,6 +601,32 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
     /* no more frames */
     return false;
 
+  isKeyframe = !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
+  /* XXX ? */
+  int64_t offset = 0;
+
+  if (GStreamerGLHelper::GetHandleBuffer(buffer) != nullptr)
+  {
+    SharedTextureHandle handle =
+      gl::GLContextProvider::CreateSharedHandle(gl::SameProcess,
+                                                (void*)buffer,
+                                                gl::GstreamerMagicHandle);
+
+    VideoData *v = VideoData::Create(mInfo,
+                                     mDecoder->GetImageContainer(),
+                                     (void*)handle,
+                                     mPicture,
+                                     0, timestamp, nextTimestamp,
+                                     isKeyframe, -1);
+    gst_buffer_unref(buffer);
+
+    if (!v)
+      return false;
+
+    mVideoQueue.Push(v);
+    return true;
+  }
+
   nsRefPtr<PlanarYCbCrImage> image;
   GstMozVideoBufferData* bufferdata = reinterpret_cast<GstMozVideoBufferData*>
       GST_IS_MOZ_VIDEO_BUFFER(buffer)?gst_moz_video_buffer_get_data(GST_MOZ_VIDEO_BUFFER(buffer)):nullptr;
@@ -766,9 +669,6 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
     b.mPlanes[i].mSkip = 0;
   }
 
-  isKeyframe = !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
-  /* XXX ? */
-  int64_t offset = 0;
   VideoData* video = VideoData::Create(mInfo, image, offset,
                                        timestamp, nextTimestamp, b,
                                        isKeyframe, -1, mPicture);
@@ -998,7 +898,7 @@ gboolean GStreamerReader::EventProbe(GstPad* aPad, GstEvent* aEvent)
       ReentrantMonitorAutoEnter mon(mGstThreadsMonitor);
       gst_event_parse_new_segment(aEvent, &update, &rate, &format,
           &start, &stop, &position);
-      if (parent == mPlaySink ? mPlaySink : GST_ELEMENT(mVideoAppSink))
+      if (parent == GST_ELEMENT(mVideoAppSink))
         segment = &mVideoSegment;
       else
         segment = &mAudioSegment;
@@ -1104,7 +1004,7 @@ void GStreamerReader::VideoPreroll()
 {
   /* The first video buffer has reached the video sink. Get width and height */
   LOG(PR_LOG_DEBUG, ("Video preroll"));
-  GstPad* sinkpad = gst_element_get_pad(mPlaySink ? mPlaySink : GST_ELEMENT(mVideoAppSink), "sink");
+  GstPad* sinkpad = gst_element_get_pad(GST_ELEMENT(mVideoAppSink), "sink");
   GstCaps* caps = gst_pad_get_negotiated_caps(sinkpad);
   gst_video_format_parse_caps(caps, &mFormat, &mPicture.width, &mPicture.height);
   GstStructure* structure = gst_caps_get_structure(caps, 0);
@@ -1114,33 +1014,6 @@ void GStreamerReader::VideoPreroll()
   mInfo.mHasVideo = true;
   gst_caps_unref(caps);
   gst_object_unref(sinkpad);
-}
-
-void GStreamerReader::PlaySinkCapsNotify(GObject* obj,
-                                         GParamSpec* pspec,
-                                         gpointer aUserData)
-{
-  GstPad* pad = GST_PAD(obj);
-  if (pad && GST_PAD_CAPS(pad)) {
-    GStreamerReader* reader = reinterpret_cast<GStreamerReader*>(aUserData);
-    reader->VideoPreroll();
-  }
-}
-
-void GStreamerReader::PlaySinkFrameSetupCb(GstElement* aPlaySink,
-                                           gint aFrame,
-                                           gpointer aUserData)
-{
-  GStreamerReader* reader = reinterpret_cast<GStreamerReader*>(aUserData);
-  reader->PlaySinkFrameSetup(aFrame);
-}
-
-void GStreamerReader::PlaySinkFrameSetup(gint aFrame)
-{
-  if (mVideoQueue.GetSize() == 0)
-  {
-    NewVideoBuffer();
-  }
 }
 
 GstFlowReturn GStreamerReader::NewBufferCb(GstAppSink* aSink,

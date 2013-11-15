@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#if !defined(__APPLE__) && !defined(HAS_NEMO_INTERFACE)
+#ifndef __APPLE__
 
 /*
  * List of symbol names we need to dlsym from the gstreamer library.
@@ -24,6 +24,7 @@ GST_FUNC(LIBGSTREAMER, gst_bin_get_type)
 GST_FUNC(LIBGSTREAMER, gst_bin_iterate_recurse)
 GST_FUNC(LIBGSTREAMER, gst_buffer_copy_metadata)
 GST_FUNC(LIBGSTREAMER, gst_buffer_get_type)
+GST_FUNC(LIBGSTREAMER, gst_buffer_get_qdata)
 GST_FUNC(LIBGSTREAMER, gst_buffer_new)
 GST_FUNC(LIBGSTREAMER, gst_buffer_new_and_alloc)
 GST_FUNC(LIBGSTREAMER, gst_bus_set_sync_handler)
@@ -68,7 +69,6 @@ GST_FUNC(LIBGSTREAMER, gst_pad_get_element_private)
 GST_FUNC(LIBGSTREAMER, gst_pad_get_negotiated_caps)
 GST_FUNC(LIBGSTREAMER, gst_pad_set_bufferalloc_function)
 GST_FUNC(LIBGSTREAMER, gst_pad_set_element_private)
-GST_FUNC(LIBGSTREAMER, gst_pad_get_type)
 GST_FUNC(LIBGSTREAMER, gst_parse_bin_from_description)
 GST_FUNC(LIBGSTREAMER, gst_pipeline_get_bus)
 GST_FUNC(LIBGSTREAMER, gst_pipeline_get_type)
@@ -85,6 +85,9 @@ GST_FUNC(LIBGSTREAMER, gst_structure_get_fraction)
 GST_FUNC(LIBGSTREAMER, gst_structure_get_int)
 GST_FUNC(LIBGSTREAMER, gst_structure_get_value)
 GST_FUNC(LIBGSTREAMER, gst_structure_new)
+GST_FUNC(LIBGSTREAMER, gst_structure_has_field)
+GST_FUNC(LIBGSTREAMER, gst_structure_get_field_type)
+GST_FUNC(LIBGSTREAMER, gst_structure_get)
 GST_FUNC(LIBGSTREAMER, gst_util_uint64_scale)
 GST_FUNC(LIBGSTVIDEO, gst_video_format_get_component_height)
 GST_FUNC(LIBGSTVIDEO, gst_video_format_get_component_offset)
