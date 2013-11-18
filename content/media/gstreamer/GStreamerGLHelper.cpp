@@ -17,13 +17,11 @@ namespace mozilla {
 
 void GStreamerGLHelper::BufferRef(void* aBuffer)
 {
-
   gst_buffer_ref(GST_BUFFER(aBuffer));
 }
 
 void GStreamerGLHelper::BufferUnRef(void* aBuffer)
 {
-  printf(">>>>>>Func:%s::%d bufferUnref:%i\n", __PRETTY_FUNCTION__, __LINE__, GST_MINI_OBJECT_REFCOUNT(GST_BUFFER(aBuffer)));
   gst_buffer_unref(GST_BUFFER(aBuffer));
 }
 
